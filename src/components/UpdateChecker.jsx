@@ -1,3 +1,11 @@
+/*
+ * @Author: Rowe inetech@zohomail.com
+ * @Date: 2025-12-25 00:56:53
+ * @LastEditors: Rowe inetech@zohomail.com
+ * @LastEditTime: 2025-12-25 01:00:57
+ * @FilePath: \sublink-worker\src\components\UpdateChecker.jsx
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { APP_VERSION, GITHUB_REPO, GITHUB_API_RELEASES, DOCS_URL } from '../constants.js';
@@ -32,31 +40,7 @@ export const UpdateChecker = () => {
                             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 border border-primary-100 dark:border-primary-800" x-text="'v' + latestVersion"></span>
                         </h4>
                         <div class="mt-3 flex items-center gap-3 flex-wrap">
-                            <a
-                                href={releaseUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="text-xs font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
-                            >
-                                <span x-text="i18n.viewRelease || 'View Release'"></span>
-                            </a>
-                            <div class="w-px h-3 bg-gray-200 dark:bg-gray-700"></div>
-                            <button
-                                x-on:click="dismissUpdate()"
-                                class="text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
-                            >
-                                <span x-text="i18n.later || 'Later'"></span>
-                            </button>
-                            <div class="w-px h-3 bg-gray-200 dark:bg-gray-700"></div>
-                            <a
-                                href={updateGuideUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="text-xs font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors flex items-center gap-1"
-                            >
-                                <i class="fas fa-book text-xs"></i>
-                                <span x-text="i18n.updateGuide || 'Update Guide'"></span>
-                            </a>
+
                         </div>
                     </div>
                     <button
