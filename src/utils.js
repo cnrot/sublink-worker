@@ -1,4 +1,6 @@
 const PATH_LENGTH = 7;
+const FNV_32_OFFSET_BASIS = 0x811c9dc5;
+const FNV_32_PRIME = 0x01000193;
 
 // 自定义的字符串前缀检查函数
 export function checkStartsWith(str, prefix) {
@@ -209,6 +211,22 @@ export function groupProxiesByCountry(proxies, { getName } = {}) {
 
 	return grouped;
 }
+
+export function createStableProviderName(url) {
+	if (typeof url !== 'string' || url.trim() === '') {
+		throw new Error('Provider URL must be a non-empty string');
+	}
+
+	const normalizedUrl = url.trim();
+	let hash = FNV_32_OFFSET_BASIS;
+	for (let i = 0; i < normalizedUrl.length; i++) {
+		hash ^= normalizedUrl.charCodeAt(i);
+		hash = Math.imul(hash, FNV_32_PRIME);
+	}
+
+	return `_auto_provider_${(hash >>> 0).toString(36)}`;
+}
+
 export function deepCopy(obj) {
 	if (obj === null || typeof obj !== 'object') {
 		return obj;
@@ -235,6 +253,9 @@ export function generateWebPath(length = PATH_LENGTH) {
 }
 
 export function parseServerInfo(serverInfo) {
+	if (!serverInfo || typeof serverInfo !== 'string') {
+		return { host: null, port: null };
+	}
 	let host, port;
 	if (serverInfo.startsWith('[')) {
 		const closeBracketIndex = serverInfo.indexOf(']');
@@ -267,7 +288,7 @@ export function parseUrlParams(url) {
 
 export function createTlsConfig(params) {
 	let tls = { enabled: false };
-	if (params.security != 'none') {
+	if (params.security && params.security !== 'none') {
 		tls = {
 			enabled: true,
 			server_name: params.sni || params.host,
@@ -326,49 +347,64 @@ export function parseArray(value) {
 		.filter(entry => entry.length > 0);
 }
 
-export function parseCountryFromNodeName(nodeName) {
-	const countryData = {
-		'HK': { name: 'Hong Kong', emoji: '🇭🇰', aliases: ['香港', 'Hong Kong', 'HK'] },
-		'TW': { name: 'Taiwan', emoji: '🇹🇼', aliases: ['台湾', 'Taiwan', 'TW'] },
-		'JP': { name: 'Japan', emoji: '🇯🇵', aliases: ['日本', 'Japan', 'JP'] },
-		'KR': { name: 'Korea', emoji: '🇰🇷', aliases: ['韩国', 'Korea', 'KR'] },
-		'SG': { name: 'Singapore', emoji: '🇸🇬', aliases: ['新加坡', 'Singapore', 'SG'] },
-		'US': { name: 'United States', emoji: '🇺🇸', aliases: ['美国', 'United States', 'US'] },
-		'GB': { name: 'United Kingdom', emoji: '🇬🇧', aliases: ['英国', 'United Kingdom', 'UK', 'GB'] },
-		'DE': { name: 'Germany', emoji: '🇩🇪', aliases: ['德国', 'Germany'] },
-		'FR': { name: 'France', emoji: '🇫🇷', aliases: ['法国', 'France'] },
-		'RU': { name: 'Russia', emoji: '🇷🇺', aliases: ['俄罗斯', 'Russia'] },
-		'CA': { name: 'Canada', emoji: '🇨🇦', aliases: ['加拿大', 'Canada'] },
-		'AU': { name: 'Australia', emoji: '🇦🇺', aliases: ['澳大利亚', 'Australia'] },
-		'IN': { name: 'India', emoji: '🇮🇳', aliases: ['印度', 'India'] },
-		'BR': { name: 'Brazil', emoji: '🇧🇷', aliases: ['巴西', 'Brazil'] },
-		'ZA': { name: 'South Africa', emoji: '🇿🇦', aliases: ['南非', 'South Africa'] },
-		'AR': { name: 'Argentina', emoji: '🇦🇷', aliases: ['阿根廷', 'Argentina'] },
-		'TR': { name: 'Turkey', emoji: '🇹🇷', aliases: ['土耳其', 'Turkey'] },
-		'NL': { name: 'Netherlands', emoji: '🇳🇱', aliases: ['荷兰', 'Netherlands'] },
-		'CH': { name: 'Switzerland', emoji: '🇨🇭', aliases: ['瑞士', 'Switzerland'] },
-		'SE': { name: 'Sweden', emoji: '🇸🇪', aliases: ['瑞典', 'Sweden'] },
-		'IT': { name: 'Italy', emoji: '🇮🇹', aliases: ['意大利', 'Italy'] },
-		'ES': { name: 'Spain', emoji: '🇪🇸', aliases: ['西班牙', 'Spain'] },
-		'IE': { name: 'Ireland', emoji: '🇮🇪', aliases: ['爱尔兰', 'Ireland'] },
-		'MY': { name: 'Malaysia', emoji: '🇲🇾', aliases: ['马来西亚', 'Malaysia'] },
-		'TH': { name: 'Thailand', emoji: '🇹🇭', aliases: ['泰国', 'Thailand'] },
-		'VN': { name: 'Vietnam', emoji: '🇻🇳', aliases: ['越南', 'Vietnam'] },
-		'PH': { name: 'Philippines', emoji: '🇵🇭', aliases: ['菲律宾', 'Philippines'] },
-		'ID': { name: 'Indonesia', emoji: '🇮🇩', aliases: ['印度尼西亚', 'Indonesia'] },
-		'NZ': { name: 'New Zealand', emoji: '🇳🇿', aliases: ['新西兰', 'New Zealand'] },
-		'AE': { name: 'United Arab Emirates', emoji: '🇦🇪', aliases: ['阿联酋', 'United Arab Emirates'] },
-	};
+export const COUNTRY_DATA = {
+	'HK': { name: 'Hong Kong', emoji: '🇭🇰', aliases: ['香港', 'Hong Kong', 'HK'] },
+	'TW': { name: 'Taiwan', emoji: '🇹🇼', aliases: ['台湾', 'Taiwan', 'TW'] },
+	'JP': { name: 'Japan', emoji: '🇯🇵', aliases: ['日本', 'Japan', 'JP'] },
+	'KR': { name: 'Korea', emoji: '🇰🇷', aliases: ['韩国', 'Korea', 'KR'] },
+	'SG': { name: 'Singapore', emoji: '🇸🇬', aliases: ['新加坡', 'Singapore', 'SG'] },
+	'US': { name: 'United States', emoji: '🇺🇸', aliases: ['美国', 'United States', 'US'] },
+	'GB': { name: 'United Kingdom', emoji: '🇬🇧', aliases: ['英国', 'United Kingdom', 'UK', 'GB'] },
+	'DE': { name: 'Germany', emoji: '🇩🇪', aliases: ['德国', 'Germany'] },
+	'FR': { name: 'France', emoji: '🇫🇷', aliases: ['法国', 'France'] },
+	'RU': { name: 'Russia', emoji: '🇷🇺', aliases: ['俄罗斯', 'Russia'] },
+	'CA': { name: 'Canada', emoji: '🇨🇦', aliases: ['加拿大', 'Canada'] },
+	'AU': { name: 'Australia', emoji: '🇦🇺', aliases: ['澳大利亚', 'Australia'] },
+	'IN': { name: 'India', emoji: '🇮🇳', aliases: ['印度', 'India'] },
+	'BR': { name: 'Brazil', emoji: '🇧🇷', aliases: ['巴西', 'Brazil'] },
+	'ZA': { name: 'South Africa', emoji: '🇿🇦', aliases: ['南非', 'South Africa'] },
+	'AR': { name: 'Argentina', emoji: '🇦🇷', aliases: ['阿根廷', 'Argentina'] },
+	'TR': { name: 'Turkey', emoji: '🇹🇷', aliases: ['土耳其', 'Turkey'] },
+	'NL': { name: 'Netherlands', emoji: '🇳🇱', aliases: ['荷兰', 'Netherlands'] },
+	'CH': { name: 'Switzerland', emoji: '🇨🇭', aliases: ['瑞士', 'Switzerland'] },
+	'SE': { name: 'Sweden', emoji: '🇸🇪', aliases: ['瑞典', 'Sweden'] },
+	'IT': { name: 'Italy', emoji: '🇮🇹', aliases: ['意大利', 'Italy'] },
+	'ES': { name: 'Spain', emoji: '🇪🇸', aliases: ['西班牙', 'Spain'] },
+	'IE': { name: 'Ireland', emoji: '🇮🇪', aliases: ['爱尔兰', 'Ireland'] },
+	'MY': { name: 'Malaysia', emoji: '🇲🇾', aliases: ['马来西亚', 'Malaysia'] },
+	'TH': { name: 'Thailand', emoji: '🇹🇭', aliases: ['泰国', 'Thailand'] },
+	'VN': { name: 'Vietnam', emoji: '🇻🇳', aliases: ['越南', 'Vietnam'] },
+	'PH': { name: 'Philippines', emoji: '🇵🇭', aliases: ['菲律宾', 'Philippines'] },
+	'ID': { name: 'Indonesia', emoji: '🇮🇩', aliases: ['印度尼西亚', 'Indonesia'] },
+	'NZ': { name: 'New Zealand', emoji: '🇳🇿', aliases: ['新西兰', 'New Zealand'] },
+	'AE': { name: 'United Arab Emirates', emoji: '🇦🇪', aliases: ['阿联酋', 'United Arab Emirates'] },
+};
 
-	const allAliases = Object.values(countryData).flatMap(c => c.aliases);
-	const regex = new RegExp(allAliases.map(p => p.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|'), 'i');
+export function parseCountryFromNodeName(nodeName) {
+	// Build patterns sorted by length descending so longer aliases match first
+	// (e.g. "Indonesia" before "India", "United States" before "US").
+	// Short aliases (<=3 chars, all ASCII, e.g. US, UK, HK) get \b word boundaries
+	// to prevent false positives like "plus" matching "US".
+	const allEntries = Object.values(COUNTRY_DATA).flatMap(c =>
+		c.aliases.map(alias => ({ alias, escaped: alias.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') }))
+	);
+	allEntries.sort((a, b) => b.alias.length - a.alias.length);
+
+	const patterns = allEntries.map(({ alias, escaped }) => {
+		if (alias.length <= 3 && /^[A-Za-z]+$/.test(alias)) {
+			return `\\b${escaped}\\b`;
+		}
+		return escaped;
+	});
+
+	const regex = new RegExp(patterns.join('|'), 'i');
 	const match = nodeName.match(regex);
 
 	if (match) {
 		const matchedAlias = match[0];
-		for (const code in countryData) {
-			if (countryData[code].aliases.some(alias => alias.toLowerCase() === matchedAlias.toLowerCase())) {
-				return { code, ...countryData[code] };
+		for (const code in COUNTRY_DATA) {
+			if (COUNTRY_DATA[code].aliases.some(alias => alias.toLowerCase() === matchedAlias.toLowerCase())) {
+				return { code, ...COUNTRY_DATA[code] };
 			}
 		}
 	}

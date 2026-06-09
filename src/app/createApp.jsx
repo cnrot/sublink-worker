@@ -16,7 +16,7 @@ import { ShortLinkService } from '../services/shortLinkService.js';
 import { ConfigStorageService } from '../services/configStorageService.js';
 import { ServiceError, MissingDependencyError } from '../services/errors.js';
 import { normalizeRuntime } from '../runtime/runtimeConfig.js';
-import { PREDEFINED_RULE_SETS, SING_BOX_CONFIG, SING_BOX_CONFIG_V1_11 } from '../config/index.js';
+import { PREDEFINED_RULE_SETS, SING_BOX_CONFIG, SING_BOX_CONFIG_V1_11, generateSubconverterConfig } from '../config/index.js';
 
 const DEFAULT_USER_AGENT = 'curl/7.74.0';
 
@@ -57,7 +57,7 @@ export function createApp(bindings = {}) {
                                         {subtitle}
                                     </p>
                                 </div>
-                                <Form t={t} />
+                                <Form t={t} lang={lang} />
                             </div>
                         </div>
                     </main>
@@ -77,8 +77,9 @@ export function createApp(bindings = {}) {
 
             const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
             const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || DEFAULT_USER_AGENT;
+            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
             const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
+            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
             const enableClashUI = parseBooleanFlag(c.req.query('enable_clash_ui'));
             const externalController = c.req.query('external_controller');
             const externalUiDownloadUrl = c.req.query('external_ui_download_url');
@@ -109,9 +110,14 @@ export function createApp(bindings = {}) {
                 enableClashUI,
                 externalController,
                 externalUiDownloadUrl,
-                singboxConfigVersion
+                singboxConfigVersion,
+                includeAutoSelect
             );
             await builder.build();
+            const userinfo = builder.getSubscriptionUserinfo();
+            if (userinfo) {
+                c.header('subscription-userinfo', userinfo);
+            }
             return c.json(builder.config);
         } catch (error) {
             return handleError(c, error, runtime.logger);
@@ -127,8 +133,9 @@ export function createApp(bindings = {}) {
 
             const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
             const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || DEFAULT_USER_AGENT;
+            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
             const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
+            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
             const enableClashUI = parseBooleanFlag(c.req.query('enable_clash_ui'));
             const externalController = c.req.query('external_controller');
             const externalUiDownloadUrl = c.req.query('external_ui_download_url');
@@ -151,12 +158,16 @@ export function createApp(bindings = {}) {
                 groupByCountry,
                 enableClashUI,
                 externalController,
-                externalUiDownloadUrl
+                externalUiDownloadUrl,
+                includeAutoSelect
             );
             await builder.build();
-            return c.text(builder.formatConfig(), 200, {
-                'Content-Type': 'text/yaml; charset=utf-8'
-            });
+            const userinfo = builder.getSubscriptionUserinfo();
+            const headers = { 'Content-Type': 'text/yaml; charset=utf-8' };
+            if (userinfo) {
+                headers['subscription-userinfo'] = userinfo;
+            }
+            return c.text(builder.formatConfig(), 200, headers);
         } catch (error) {
             return handleError(c, error, runtime.logger);
         }
@@ -171,8 +182,9 @@ export function createApp(bindings = {}) {
 
             const selectedRules = parseSelectedRules(c.req.query('selectedRules'));
             const customRules = parseJsonArray(c.req.query('customRules'));
-            const ua = c.req.query('ua') || DEFAULT_USER_AGENT;
+            const ua = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
             const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
+            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
             const configId = c.req.query('configId');
             const lang = c.get('lang');
 
@@ -189,13 +201,60 @@ export function createApp(bindings = {}) {
                 baseConfig,
                 lang,
                 ua,
-                groupByCountry
+                groupByCountry,
+                includeAutoSelect
             );
             builder.setSubscriptionUrl(c.req.url);
             await builder.build();
 
-            c.header('subscription-userinfo', 'upload=0; download=0; total=10737418240; expire=2546249531');
+            const userinfo = builder.getSubscriptionUserinfo();
+            if (userinfo) {
+                c.header('subscription-userinfo', userinfo);
+            }
             return c.text(builder.formatConfig());
+        } catch (error) {
+            return handleError(c, error, runtime.logger);
+        }
+    });
+
+    app.get('/subconverter', (c) => {
+        try {
+            const rawSelectedRules = c.req.query('selectedRules');
+            let selectedRules;
+
+            if (!rawSelectedRules) {
+                selectedRules = PREDEFINED_RULE_SETS.balanced;
+            } else if (PREDEFINED_RULE_SETS[rawSelectedRules]) {
+                selectedRules = PREDEFINED_RULE_SETS[rawSelectedRules];
+            } else {
+                try {
+                    const parsed = JSON.parse(rawSelectedRules);
+                    if (Array.isArray(parsed)) {
+                        selectedRules = parsed;
+                    } else {
+                        return c.text('Invalid selectedRules: must be a preset name (minimal, balanced, comprehensive) or a JSON array', 400);
+                    }
+                } catch {
+                    return c.text(`Invalid selectedRules: "${rawSelectedRules}" is not a valid preset name or JSON array. Valid presets: minimal, balanced, comprehensive`, 400);
+                }
+            }
+
+            const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
+            const groupByCountry = parseBooleanFlag(c.req.query('group_by_country'));
+            const customRules = parseJsonArray(c.req.query('customRules'));
+            const lang = c.get('lang');
+
+            const config = generateSubconverterConfig({
+                selectedRules,
+                customRules,
+                lang,
+                includeAutoSelect,
+                groupByCountry
+            });
+
+            return c.text(config, 200, {
+                'Content-Type': 'text/plain; charset=utf-8'
+            });
         } catch (error) {
             return handleError(c, error, runtime.logger);
         }
@@ -209,7 +268,8 @@ export function createApp(bindings = {}) {
 
         const proxylist = inputString.split('\n');
         const finalProxyList = [];
-        const userAgent = c.req.query('ua') || DEFAULT_USER_AGENT;
+        let subscriptionUserinfo;
+        const userAgent = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
         const headers = { 'User-Agent': userAgent };
 
         for (const proxy of proxylist) {
@@ -219,6 +279,10 @@ export function createApp(bindings = {}) {
             if (trimmedProxy.startsWith('http://') || trimmedProxy.startsWith('https://')) {
                 try {
                     const response = await fetch(trimmedProxy, { method: 'GET', headers });
+                    const fetchedUserinfo = response.headers.get('subscription-userinfo');
+                    if (fetchedUserinfo && subscriptionUserinfo === undefined) {
+                        subscriptionUserinfo = fetchedUserinfo;
+                    }
                     const text = await response.text();
                     let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
                     if (!Array.isArray(processed)) processed = [processed];
@@ -238,7 +302,12 @@ export function createApp(bindings = {}) {
             return c.text('Missing config parameter', 400);
         }
 
-        return c.text(encodeBase64(finalString));
+        const responseHeaders = {};
+        if (subscriptionUserinfo) {
+            responseHeaders['subscription-userinfo'] = subscriptionUserinfo;
+        }
+
+        return c.text(encodeBase64(finalString), 200, responseHeaders);
     });
 
     app.get('/shorten-v2', async (c) => {

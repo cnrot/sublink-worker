@@ -1,7 +1,74 @@
-import { parseSurgeConfigInput } from '../utils/surgeConfigParser.js';
-
 export const formLogicFn = (t) => {
     window.formData = function () {
+        // Inline parseSurgeConfigInput to make it available in toString()
+        const parseSurgeValue = (rawValue = '') => {
+            const trimmed = rawValue.trim();
+            if (trimmed === '') return '';
+            const unquoted = trimmed.replace(/^"(.*)"$/, '$1');
+            const lower = unquoted.toLowerCase();
+            if (lower === 'true') return true;
+            if (lower === 'false') return false;
+            if (/^-?\d+(\.\d+)?$/.test(unquoted)) return Number(unquoted);
+            return unquoted;
+        };
+
+        const convertSurgeIniToJson = (content) => {
+            const lines = content.split(/\r?\n/);
+            const config = {};
+            let currentSection = null;
+            const ensureObject = (key) => {
+                if (!config[key]) config[key] = {};
+                return config[key];
+            };
+            const ensureArray = (key) => {
+                if (!config[key]) config[key] = [];
+                return config[key];
+            };
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+                const sectionMatch = line.match(/^\[(.+)]$/);
+                if (sectionMatch) {
+                    currentSection = sectionMatch[1].trim();
+                    continue;
+                }
+                if (!currentSection) continue;
+                const sectionName = currentSection.toLowerCase();
+                if (sectionName === 'general' || sectionName === 'replica') {
+                    const equalsIndex = line.indexOf('=');
+                    if (equalsIndex === -1) continue;
+                    const key = line.slice(0, equalsIndex).trim();
+                    const value = line.slice(equalsIndex + 1).trim();
+                    if (!key) continue;
+                    const target = ensureObject(sectionName);
+                    target[key] = parseSurgeValue(value);
+                } else if (sectionName === 'proxy') {
+                    ensureArray('proxies').push(line);
+                } else if (sectionName === 'proxy group') {
+                    ensureArray('proxy-groups').push(line);
+                } else if (sectionName === 'rule') {
+                    ensureArray('rules').push(line);
+                } else {
+                    ensureArray(sectionName).push(line);
+                }
+            }
+            if (!config.general && !config.replica && !config.proxies && !config['proxy-groups']) {
+                throw new Error('Unable to parse Surge INI content');
+            }
+            return config;
+        };
+
+        const parseSurgeConfigInput = (content) => {
+            const trimmed = content.trim();
+            if (!trimmed) throw new Error('Config content is empty');
+            try {
+                return { configObject: JSON.parse(trimmed), convertedFromIni: false };
+            } catch {
+                const converted = convertSurgeIniToJson(content);
+                return { configObject: converted, convertedFromIni: true };
+            }
+        };
+
         return {
             input: '',
             showAdvanced: false,
@@ -15,7 +82,9 @@ export const formLogicFn = (t) => {
             },
             selectedRules: [],
             selectedPredefinedRule: 'balanced',
+            subconverterCopied: false,
             groupByCountry: false,
+            includeAutoSelect: true,
             enableClashUI: false,
             externalController: '',
             externalUiDownloadUrl: '',
@@ -62,6 +131,7 @@ export const formLogicFn = (t) => {
                 this.input = localStorage.getItem('inputTextarea') || '';
                 this.showAdvanced = localStorage.getItem('advancedToggle') === 'true';
                 this.groupByCountry = localStorage.getItem('groupByCountry') === 'true';
+                this.includeAutoSelect = localStorage.getItem('includeAutoSelect') !== 'false';
                 this.enableClashUI = localStorage.getItem('enableClashUI') === 'true';
                 this.externalController = localStorage.getItem('externalController') || '';
                 this.externalUiDownloadUrl = localStorage.getItem('externalUiDownloadUrl') || '';
@@ -92,6 +162,7 @@ export const formLogicFn = (t) => {
                 });
                 this.$watch('showAdvanced', val => localStorage.setItem('advancedToggle', val));
                 this.$watch('groupByCountry', val => localStorage.setItem('groupByCountry', val));
+                this.$watch('includeAutoSelect', val => localStorage.setItem('includeAutoSelect', val));
                 this.$watch('enableClashUI', val => localStorage.setItem('enableClashUI', val));
                 this.$watch('externalController', val => localStorage.setItem('externalController', val));
                 this.$watch('externalUiDownloadUrl', val => localStorage.setItem('externalUiDownloadUrl', val));
@@ -120,6 +191,52 @@ export const formLogicFn = (t) => {
                 if (rules && rules[this.selectedPredefinedRule]) {
                     this.selectedRules = rules[this.selectedPredefinedRule];
                 }
+            },
+
+            getSubconverterUrl() {
+                const origin = window.location.origin;
+                const params = new URLSearchParams();
+
+                // Use preset name directly if a predefined rule set is selected
+                if (this.selectedPredefinedRule && this.selectedPredefinedRule !== 'custom') {
+                    params.append('selectedRules', this.selectedPredefinedRule);
+                } else if (this.selectedPredefinedRule === 'custom') {
+                    params.append('selectedRules', JSON.stringify(this.selectedRules));
+                }
+
+                // Include customRules when available (best-effort; may make URL long)
+                try {
+                    const customRulesInput = document.querySelector('input[name="customRules"]');
+                    const customRules = customRulesInput && customRulesInput.value ? JSON.parse(customRulesInput.value) : [];
+                    if (Array.isArray(customRules) && customRules.length > 0) {
+                        params.append('customRules', JSON.stringify(customRules));
+                    }
+                } catch { }
+
+                if (!this.includeAutoSelect) {
+                    params.append('include_auto_select', 'false');
+                }
+
+                if (this.groupByCountry) {
+                    params.append('group_by_country', 'true');
+                }
+
+                // Include lang parameter so subconverter gets correct group names
+                const appLang = window.APP_LANG || 'zh-CN';
+                if (appLang !== 'zh-CN') {
+                    params.append('lang', appLang);
+                }
+
+                const queryString = params.toString();
+                return origin + '/subconverter' + (queryString ? '?' + queryString : '');
+            },
+
+            copySubconverterUrl() {
+                const url = this.getSubconverterUrl();
+                navigator.clipboard.writeText(url).then(() => {
+                    this.subconverterCopied = true;
+                    setTimeout(() => this.subconverterCopied = false, 2000);
+                }).catch(() => {});
             },
 
             resetConfigValidation() {
@@ -262,6 +379,7 @@ export const formLogicFn = (t) => {
                     params.append('customRules', JSON.stringify(customRules));
 
                     if (this.groupByCountry) params.append('group_by_country', 'true');
+                    if (!this.includeAutoSelect) params.append('include_auto_select', 'false');
                     if (this.enableClashUI) params.append('enable_clash_ui', 'true');
                     if (this.externalController) params.append('external_controller', this.externalController);
                     if (this.externalUiDownloadUrl) params.append('external_ui_download_url', this.externalUiDownloadUrl);
@@ -503,6 +621,7 @@ export const formLogicFn = (t) => {
 
                 // Extract other parameters
                 this.groupByCountry = params.get('group_by_country') === 'true';
+                this.includeAutoSelect = params.get('include_auto_select') !== 'false';
                 this.enableClashUI = params.get('enable_clash_ui') === 'true';
 
                 const externalController = params.get('external_controller');
