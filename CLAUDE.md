@@ -17,12 +17,14 @@ Sublink Worker 是多平台代理订阅转换器：将各类协议（ShadowSocks
 
 ## 常用命令
 
-- `npm run dev` — Wrangler 本地开发（Cloudflare Workers 入口）
-- `npm run dev:node` — esbuild bundle + 启动 Node.js server（Docker 同此入口）
-- `npm test` — Vitest（基于 `@cloudflare/vitest-pool-workers`，依赖 `wrangler.toml`）
+- `npm run dev` — Wrangler 本地开发（Cloudflare Workers 入口），`wrangler.toml` 定义 KV binding 和 assets
+- `npm run dev:node` — `npm run build:node && node dist/node-server.cjs`（Docker 同此入口）
+- `npm run build:node` — esbuild bundle Node.js 服务到 `dist/node-server.cjs`
+- `npm test` — Vitest（`@cloudflare/vitest-pool-workers`，依赖 `wrangler.toml`）
 - `npx vitest test/<file>.test.js` — 跑单个测试文件
-- `npm run build` — Vercel 构建（输出到 `dist/vercel/`）
-- `npm run deploy` — `setup-kv` + `wrangler deploy`
+- `npm run build` — Vercel 构建（脚本 `scripts/build-vercel.mjs`，输出到 `dist/vercel/`）
+- `npm run deploy` — `npm run setup-kv && wrangler deploy`
+- `npm run setup-kv` — `node scripts/setup-kv.cjs`
 
 无 ESLint/Prettier/Biome 配置，未启用自动格式化。
 
@@ -34,6 +36,23 @@ Sublink Worker 是多平台代理订阅转换器：将各类协议（ShadowSocks
 - `src/runtime/runtimeConfig.js` 规范化 KV、资源获取、日志、环境变量默认值
 
 新增运行时：在 `src/runtime/` 加 adapter，按需在 `src/adapters/kv/` 加 KV 实现，按需在 `src/platforms/` 加入口。
+
+## 订阅转换请求生命周期
+
+```
+请求 → URL 路由 (createApp Hono router)
+  ├── GET /         — 渲染 Web 首页 (JSX SSR)
+  ├── GET /singbox  — 输出 Sing-Box JSON 配置
+  ├── GET /clash    — 输出 Clash YAML 配置
+  ├── GET /surge    — 输出 Surge INI 配置
+  └── POST /sub     — 生成短链 (返回 JSON {key, ...})
+```
+
+各转换端点流程：`parseSelectedRules()` → `tryDecodeSubscriptionLines()`（Base64/原文兼容）→ `ProxyParser.parse()` 解析每行 → 对应 `*ConfigBuilder.build()` → `formatConfig()` 输出。
+
+- `selectedRules` 参数控制规则集选择，向下兼容旧格式（`/sub` 端点的 `selectedRules` 字段）
+- `customRules` 支持用户自定义规则
+- `ua`/`config` 参数来自 URL query
 
 ## KV 存储抽象
 
@@ -70,10 +89,13 @@ Vitest + `@cloudflare/vitest-pool-workers`，配置 `vitest.config.js` 指向 `w
 
 ## 关键约定
 
-- `.jsx` 文件用 Hono JSX runtime，**不是 React**
+- `.jsx` 文件用 Hono JSX runtime（`/** @jsxImportSource hono/jsx */`），**不是 React**
 - Base64 输入用 `tryDecodeSubscriptionLines()` 处理（同时支持原文和 Base64）
-- 错误用 `ServiceError` 子类（`InvalidPayloadError`、`MissingDependencyError`），返回干净响应
-- i18n：zh-CN / en-US / fa-IR，文件在 `src/i18n/`
+- 错误处理：`ServiceError` → `InvalidPayloadError`(400) / `InvalidConfigError`(400) / `MissingDependencyError`(501)，`createApp` 中由 `handleError()` 统一捕获
+- i18n 文件在 `src/i18n/index.js`，支持 zh-CN / en-US / fa-IR / ru；通过 `createTranslator(lang)` 创建翻译函数
+- `src/config/index.js` 是配置中心的统一导出入口：规则集、规则 URL、客户端 base config、转换选项
+- `wrangler.toml` 声明 `SUBLINK_KV` binding 和 `assets` 目录
+- `vercel.json` 将所有路由 rewrite 到 `api/index.js`
 
 ## 本地工作流
 
