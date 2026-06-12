@@ -184,3 +184,14 @@ AGENTS.local.md
 
 # Local upstream source references
 .upstreams/
+graphify-out/.graphify_labels.json
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cache/ast/v0.8.38/276fd0e7de78d3ce46d0262baef3be39a13b27561da9b70830e7326bc93154a5.json
+graphify-out/cache/ast/v0.8.38/9c2ee7bfddfec93568c4800553d9df16d7ef4d8d759441f624e87fd59c9df079.json
+graphify-out/cache/ast/v0.8.38/a6d780dab592cc7e1fbce6c1957399bc7509469dc19a400974443c2c5f9b22b9.json
+graphify-out/cache/stat-index.json
+graphify-out/cost.json
+graphify-out/graph.html
+graphify-out/graph.json
+graphify-out/GRAPH_REPORT.md
