@@ -7,6 +7,20 @@ import { buildSelectorMembers as buildSelectorMemberList, buildNodeSelectMembers
 import { normalizeGroupName } from './helpers/groupNameUtils.js';
 
 const RULE_SET_HTTP_CLIENT_TAG = 'rule-set-download';
+const ANYTLS_OPTION_KEYS = {
+    'idle-session-check-interval': 'idle_session_check_interval',
+    'idle-session-timeout': 'idle_session_timeout',
+    'min-idle-session': 'min_idle_session'
+};
+
+function isDirectDnsServer(server, outbounds = []) {
+    if (!server?.tag || server.type === 'fakeip') return false;
+    if (!server.detour) return true;
+
+    // A detour is proxy-independent only when its actual target is direct.
+    const target = outbounds.find(outbound => outbound?.tag === server.detour);
+    return target?.type === 'direct' && !target.detour;
+}
 
 export class SingboxConfigBuilder extends BaseConfigBuilder {
     constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.12', includeAutoSelect = true) {
@@ -100,6 +114,24 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         // Create a shallow copy to avoid mutating the original
         const sanitized = { ...proxy };
 
+        // URI and Clash inputs use Mihomo's kebab-case names, while sing-box
+        // rejects those keys and requires its native snake_case options.
+        if (sanitized.type === 'anytls') {
+            Object.entries(ANYTLS_OPTION_KEYS).forEach(([sourceKey, targetKey]) => {
+                if (sanitized[sourceKey] !== undefined && sanitized[targetKey] === undefined) {
+                    sanitized[targetKey] = sanitized[sourceKey];
+                }
+                delete sanitized[sourceKey];
+            });
+            // sing-box types the two idle intervals as Duration strings ("30s"),
+            // while share links and Mihomo carry plain seconds
+            ['idle_session_check_interval', 'idle_session_timeout'].forEach((key) => {
+                if (typeof sanitized[key] === 'number') {
+                    sanitized[key] = `${sanitized[key]}s`;
+                }
+            });
+        }
+
         // Strip Clash-only / mis-typed fields that conflict with sing-box semantics.
         // `udp` is Clash-only. Top-level `network` in sing-box is a TCP/UDP allowlist
         // (NetworkList in option/types.go); a stray "tcp" silently disables UDP for
@@ -123,6 +155,34 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         // Remove packet_encoding for now - it's version-specific in sing-box
         // xudp is default in newer versions
         delete sanitized.packet_encoding;
+
+        if (sanitized.type === 'hysteria2') {
+            // sing-box names port-hopping/bandwidth fields differently from the
+            // share-link shape, and rejects unknown fields outright
+            if (sanitized.ports) {
+                const ranges = String(sanitized.ports).split(',')
+                    .map(range => range.trim().replace('-', ':'))
+                    .filter(Boolean);
+                if (ranges.length > 0) {
+                    sanitized.server_ports = ranges;
+                }
+                delete sanitized.ports;
+            }
+            if (typeof sanitized.hop_interval === 'number') {
+                sanitized.hop_interval = `${sanitized.hop_interval}s`;
+            }
+            if (sanitized.up !== undefined) {
+                sanitized.up_mbps = sanitized.up;
+                delete sanitized.up;
+            }
+            if (sanitized.down !== undefined) {
+                sanitized.down_mbps = sanitized.down;
+                delete sanitized.down;
+            }
+            delete sanitized.auth;
+            delete sanitized.recv_window_conn;
+            delete sanitized.fast_open;
+        }
 
         return sanitized;
     }
@@ -496,13 +556,13 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
      */
     configureRuleSetDownload() {
         if (this.singboxVersion === '1.14') {
-            if (this.config.route.default_http_client) {
-                return;
+            if (!this.config.route.default_http_client) {
+                if (!Array.isArray(this.config.http_clients) || this.config.http_clients.length === 0) {
+                    this.config.http_clients = [{ tag: RULE_SET_HTTP_CLIENT_TAG, detour: 'DIRECT' }];
+                }
+                this.config.route.default_http_client = this.config.http_clients[0].tag;
             }
-            if (!Array.isArray(this.config.http_clients) || this.config.http_clients.length === 0) {
-                this.config.http_clients = [{ tag: RULE_SET_HTTP_CLIENT_TAG, detour: 'DIRECT' }];
-            }
-            this.config.route.default_http_client = this.config.http_clients[0].tag;
+            this.ensureDownloadTargetNotEmptyDirect();
             return;
         }
         this.config.route.rule_set.forEach(ruleSet => {
@@ -512,9 +572,43 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         });
     }
 
+    /**
+     * sing-box >=1.12 rejects a detour targeting an empty direct outbound
+     * ("detour to an empty direct outbound makes no sense"), which kills every
+     * remote rule-set download on the 1.14 tier. Give the detour target a
+     * domain_resolver so it is no longer empty; mirroring
+     * route.default_domain_resolver keeps this a no-op.
+     */
+    ensureDownloadTargetNotEmptyDirect() {
+        const clientTag = this.config.route.default_http_client;
+        const client = (this.config.http_clients || []).find(c => c?.tag === clientTag);
+        if (!client?.detour) return;
+        const target = (this.config.outbounds || []).find(o => o?.tag === client.detour);
+        if (target?.type !== 'direct') return;
+        const hasDialFields = Object.keys(target).some(key => key !== 'type' && key !== 'tag');
+        if (hasDialFields) return;
+        const candidates = (this.config.dns?.servers || []).filter(server => isDirectDnsServer(server, this.config.outbounds));
+        const resolver = typeof this.config.route.default_domain_resolver === 'string'
+            ? this.config.route.default_domain_resolver
+            : (candidates.find(server => server.type === 'udp') || candidates[0])?.tag;
+        if (resolver) {
+            target.domain_resolver = resolver;
+        }
+    }
+
     formatConfig() {
         const rules = generateRules(this.selectedRules, this.customRules);
         const { site_rule_sets, ip_rule_sets } = generateRuleSets(this.selectedRules, this.customRules);
+
+        // Subscription route overrides must not make node bootstrap depend on proxy DNS.
+        if (this.singboxVersion !== '1.11' && !this.config.route.default_domain_resolver) {
+            const bootstrapResolver = (this.config.dns?.servers || []).find(server =>
+                server?.tag === 'dns_resolver' && isDirectDnsServer(server, this.config.outbounds)
+            );
+            if (bootstrapResolver) {
+                this.config.route.default_domain_resolver = bootstrapResolver.tag;
+            }
+        }
 
         this.config.route.rule_set = [...site_rule_sets, ...ip_rule_sets];
         this.configureRuleSetDownload();
